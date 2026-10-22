@@ -75,15 +75,16 @@ jobs:
                   applicationId 'com.zysfx.app'
                   minSdk 23
                   targetSdk 35
-                  versionCode 1
-                  versionName '1.0.0'
+                  versionCode 2
+                  versionName '1.1.0'
               }
           }
           EOF
 
           cat > app/src/main/AndroidManifest.xml <<'EOF'
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-              <uses-permission android:name="android.permission.INTERNET"/>
+
+              <uses-permission android:name="android.permission.INTERNET" />
 
               <application
                   android:label="资源社"
@@ -92,13 +93,14 @@ jobs:
 
                   <activity
                       android:name=".MainActivity"
-                      android:configChanges="orientation|screenSize|keyboardHidden"
-                      android:exported="true">
+                      android:exported="true"
+                      android:configChanges="orientation|screenSize|keyboardHidden">
 
                       <intent-filter>
-                          <action android:name="android.intent.action.MAIN"/>
-                          <category android:name="android.intent.category.LAUNCHER"/>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
                       </intent-filter>
+
                   </activity>
               </application>
           </manifest>
@@ -108,6 +110,7 @@ jobs:
           package com.zysfx.app;
 
           import android.app.Activity;
+          import android.content.pm.ActivityInfo;
           import android.os.Bundle;
           import android.graphics.Color;
           import android.view.View;
@@ -120,11 +123,15 @@ jobs:
           import android.widget.FrameLayout;
 
           public class MainActivity extends Activity {
+
               private WebView webView;
               private View customView;
               private FrameLayout fullscreenContainer;
               private WebChromeClient.CustomViewCallback fullscreenCallback;
+
               private int oldSystemUiVisibility;
+              private int oldRequestedOrientation =
+                      ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED;
 
               @Override
               protected void onCreate(Bundle state) {
@@ -132,18 +139,31 @@ jobs:
 
                   webView = new WebView(this);
 
+                  webView.setLayoutParams(
+                      new ViewGroup.LayoutParams(
+                          ViewGroup.LayoutParams.MATCH_PARENT,
+                          ViewGroup.LayoutParams.MATCH_PARENT
+                      )
+                  );
+
                   WebSettings settings = webView.getSettings();
                   settings.setJavaScriptEnabled(true);
                   settings.setDomStorageEnabled(true);
                   settings.setMediaPlaybackRequiresUserGesture(false);
+                  settings.setLoadWithOverviewMode(true);
+                  settings.setUseWideViewPort(true);
+                  settings.setSupportZoom(true);
+                  settings.setBuiltInZoomControls(false);
 
                   webView.setWebViewClient(new WebViewClient());
 
                   webView.setWebChromeClient(new WebChromeClient() {
+
                       @Override
                       public void onShowCustomView(
                               View view,
                               CustomViewCallback callback) {
+
                           if (customView != null) {
                               callback.onCustomViewHidden();
                               return;
@@ -152,12 +172,16 @@ jobs:
                           customView = view;
                           fullscreenCallback = callback;
 
+                          oldRequestedOrientation =
+                                  getRequestedOrientation();
+
                           View decor = getWindow().getDecorView();
                           oldSystemUiVisibility =
-                              decor.getSystemUiVisibility();
+                                  decor.getSystemUiVisibility();
 
                           fullscreenContainer =
-                              new FrameLayout(MainActivity.this);
+                                  new FrameLayout(MainActivity.this);
+
                           fullscreenContainer.setBackgroundColor(Color.BLACK);
 
                           fullscreenContainer.addView(
@@ -180,6 +204,12 @@ jobs:
                               WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
                           );
 
+                          // 视频进入全屏后优先切换至横屏
+                          setRequestedOrientation(
+                              ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                          );
+
+                          // 隐藏状态栏和底部导航栏
                           decor.setSystemUiVisibility(
                               View.SYSTEM_UI_FLAG_FULLSCREEN
                               | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
@@ -192,15 +222,20 @@ jobs:
 
                       @Override
                       public void onHideCustomView() {
-                          exitFullscreen();
+                          hideFullscreen();
                       }
                   });
 
                   setContentView(webView);
-                  webView.loadUrl("https://www.zysfx.com/");
+
+                  if (state == null) {
+                      webView.loadUrl("https://www.zysfx.com/");
+                  } else {
+                      webView.restoreState(state);
+                  }
               }
 
-              private void exitFullscreen() {
+              private void hideFullscreen() {
                   if (customView == null) {
                       return;
                   }
@@ -218,21 +253,34 @@ jobs:
                       WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
                   );
 
+                  // 恢复进入全屏前的屏幕方向
+                  setRequestedOrientation(oldRequestedOrientation);
+
+                  // 恢复系统状态栏及导航栏
                   decor.setSystemUiVisibility(oldSystemUiVisibility);
 
-                  WebChromeClient.CustomViewCallback callback =
-                      fullscreenCallback;
-                  fullscreenCallback = null;
+                  if (fullscreenCallback != null) {
+                      WebChromeClient.CustomViewCallback callback =
+                              fullscreenCallback;
 
-                  if (callback != null) {
+                      fullscreenCallback = null;
                       callback.onCustomViewHidden();
+                  }
+              }
+
+              @Override
+              protected void onSaveInstanceState(Bundle out) {
+                  super.onSaveInstanceState(out);
+
+                  if (webView != null) {
+                      webView.saveState(out);
                   }
               }
 
               @Override
               public void onBackPressed() {
                   if (customView != null) {
-                      exitFullscreen();
+                      hideFullscreen();
                   } else if (webView != null && webView.canGoBack()) {
                       webView.goBack();
                   } else {
@@ -243,10 +291,11 @@ jobs:
               @Override
               protected void onDestroy() {
                   if (customView != null) {
-                      exitFullscreen();
+                      hideFullscreen();
                   }
 
                   if (webView != null) {
+                      webView.stopLoading();
                       webView.destroy();
                       webView = null;
                   }
