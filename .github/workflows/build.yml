@@ -8,6 +8,9 @@ on:
       - ".github/workflows/build.yml"
       - "app-icon.png"
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -26,9 +29,7 @@ jobs:
         uses: android-actions/setup-android@v4
 
       - name: Install Android SDK packages
-        run: |
-          sdkmanager "platforms;android-35" "build-tools;35.0.0"
-          python3 -m pip install pillow
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -40,85 +41,21 @@ jobs:
         run: |
           set -e
 
+          mkdir -p app/src/main/java/com/zysfx/app
+          mkdir -p app/src/main/res/drawable-nodpi
+
           if [ ! -f app-icon.png ]; then
-            echo "ERROR: 仓库根目录缺少 app-icon.png"
+            echo "ERROR: 请将金色 Z 图标上传到仓库根目录，文件名必须为 app-icon.png"
             exit 1
           fi
 
-          mkdir -p app/src/main/java/com/zysfx/app
-          mkdir -p app/src/main/res
+          cp app-icon.png app/src/main/res/drawable-nodpi/app_icon.png
 
-          python3 - <<'PY'
-          from PIL import Image
-          from pathlib import Path
-
-          src = Image.open("app-icon.png").convert("RGBA")
-          res = Path("app/src/main/res")
-
-          def make_icon(size, background=(17, 17, 20, 255)):
-              canvas = Image.new("RGBA", (size, size), background)
-              icon = src.copy()
-              icon.thumbnail(
-                  (int(size * 0.82), int(size * 0.82)),
-                  Image.Resampling.LANCZOS
-              )
-              x = (size - icon.width) // 2
-              y = (size - icon.height) // 2
-              canvas.alpha_composite(icon, (x, y))
-              return canvas
-
-          sizes = {
-              "mipmap-mdpi": 48,
-              "mipmap-hdpi": 72,
-              "mipmap-xhdpi": 96,
-              "mipmap-xxhdpi": 144,
-              "mipmap-xxxhdpi": 192,
-          }
-
-          for folder, size in sizes.items():
-              path = res / folder
-              path.mkdir(parents=True, exist_ok=True)
-              make_icon(size).save(path / "ic_launcher.png")
-              make_icon(size).save(path / "ic_launcher_round.png")
-
-          drawable = res / "drawable"
-          drawable.mkdir(parents=True, exist_ok=True)
-
-          foreground = Image.new("RGBA", (432, 432), (0, 0, 0, 0))
-          icon = src.copy()
-          icon.thumbnail((280, 280), Image.Resampling.LANCZOS)
-          foreground.alpha_composite(
-              icon,
-              ((432 - icon.width) // 2, (432 - icon.height) // 2)
-          )
-          foreground.save(drawable / "ic_launcher_foreground.png")
-
-          values = res / "values"
-          values.mkdir(parents=True, exist_ok=True)
-          (values / "colors.xml").write_text(
-              '<?xml version="1.0" encoding="utf-8"?>\n'
-              '<resources>\n'
-              '    <color name="ic_launcher_background">#111114</color>\n'
-              '</resources>\n',
-              encoding="utf-8"
-          )
-
-          adaptive = res / "mipmap-anydpi-v26"
-          adaptive.mkdir(parents=True, exist_ok=True)
-
-          xml = (
-              '<?xml version="1.0" encoding="utf-8"?>\n'
-              '<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">\n'
-              '    <background android:drawable="@color/ic_launcher_background"/>\n'
-              '    <foreground android:drawable="@drawable/ic_launcher_foreground"/>\n'
-              '</adaptive-icon>\n'
-          )
-
-          (adaptive / "ic_launcher.xml").write_text(xml, encoding="utf-8")
-          (adaptive / "ic_launcher_round.xml").write_text(xml, encoding="utf-8")
-
-          print("App 图标资源生成成功")
-          PY
+          cat > gradle.properties <<'EOF'
+          android.useAndroidX=true
+          android.enableJetifier=true
+          org.gradle.jvmargs=-Xmx2g -Dfile.encoding=UTF-8
+          EOF
 
           cat > settings.gradle <<'EOF'
           pluginManagement {
@@ -160,14 +97,8 @@ jobs:
                   applicationId 'com.zysfx.app'
                   minSdk 23
                   targetSdk 35
-                  versionCode 7
-                  versionName '1.5.1'
-              }
-
-              buildTypes {
-                  debug {
-                      minifyEnabled false
-                  }
+                  versionCode 2
+                  versionName '1.1.0'
               }
           }
 
@@ -183,15 +114,15 @@ jobs:
 
               <application
                   android:label="资源社"
-                  android:icon="@mipmap/ic_launcher"
-                  android:roundIcon="@mipmap/ic_launcher_round"
+                  android:icon="@drawable/app_icon"
                   android:theme="@android:style/Theme.Material.Light.NoActionBar"
                   android:usesCleartextTraffic="false">
 
                   <activity
                       android:name=".MainActivity"
                       android:exported="true"
-                      android:configChanges="orientation|screenSize|keyboardHidden">
+                      android:configChanges="orientation|screenSize|keyboardHidden"
+                      android:screenOrientation="unspecified">
 
                       <intent-filter>
                           <action android:name="android.intent.action.MAIN"/>
@@ -207,19 +138,19 @@ jobs:
           package com.zysfx.app;
 
           import android.app.Activity;
-          import android.content.pm.ActivityInfo;
-          import android.graphics.Color;
           import android.os.Bundle;
+          import android.graphics.Color;
+          import android.content.pm.ActivityInfo;
           import android.view.View;
           import android.view.ViewGroup;
           import android.view.WindowManager;
-          import android.webkit.JavascriptInterface;
           import android.webkit.WebChromeClient;
           import android.webkit.WebSettings;
           import android.webkit.WebView;
           import android.webkit.WebViewClient;
+          import android.webkit.WebResourceRequest;
+          import android.webkit.WebResourceError;
           import android.widget.FrameLayout;
-
           import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 
           public class MainActivity extends Activity {
@@ -232,65 +163,7 @@ jobs:
               private WebChromeClient.CustomViewCallback fullscreenCallback;
 
               private int oldSystemUiVisibility;
-              private int oldRequestedOrientation =
-                      ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED;
-
-              private boolean orientationChanged = false;
-              private volatile boolean lastMediaLandscape = false;
-
-              private void enterOrientation(int orientation) {
-                  if (!orientationChanged) {
-                      oldRequestedOrientation = getRequestedOrientation();
-                      orientationChanged = true;
-                  }
-
-                  setRequestedOrientation(orientation);
-              }
-
-              private void restoreOrientation() {
-                  if (orientationChanged) {
-                      setRequestedOrientation(oldRequestedOrientation);
-                      orientationChanged = false;
-                  }
-              }
-
-              private class OrientationBridge {
-
-                  @JavascriptInterface
-                  public void setContentOrientation(final int mode) {
-                      runOnUiThread(() -> {
-                          if (customView != null) return;
-
-                          if (mode == 1) {
-                              enterOrientation(
-                                  ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-                              );
-                          } else if (mode == 0) {
-                              enterOrientation(
-                                  ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-                              );
-                          }
-                      });
-                  }
-
-                  @JavascriptInterface
-                  public void restoreContentOrientation() {
-                      runOnUiThread(() -> {
-                          if (customView == null) {
-                              restoreOrientation();
-                          }
-                      });
-                  }
-
-                  @JavascriptInterface
-                  public void setMediaDimensions(int width, int height) {
-                      if (width > 0 && height > 0) {
-                          lastMediaLandscape = width > height;
-                      } else {
-                          lastMediaLandscape = false;
-                      }
-                  }
-              }
+              private int oldRequestedOrientation;
 
               @Override
               protected void onCreate(Bundle state) {
@@ -298,10 +171,12 @@ jobs:
 
                   swipeRefreshLayout = new SwipeRefreshLayout(this);
                   swipeRefreshLayout.setColorSchemeColors(
-                      Color.rgb(220, 30, 80)
+                      Color.rgb(220, 160, 35),
+                      Color.rgb(50, 150, 220)
                   );
 
                   webView = new WebView(this);
+
                   webView.setLayoutParams(
                       new ViewGroup.LayoutParams(
                           ViewGroup.LayoutParams.MATCH_PARENT,
@@ -309,16 +184,12 @@ jobs:
                       )
                   );
 
-                  WebSettings settings = webView.getSettings();
-                  settings.setJavaScriptEnabled(true);
-                  settings.setDomStorageEnabled(true);
-                  settings.setMediaPlaybackRequiresUserGesture(false);
-                  settings.setLoadWithOverviewMode(true);
-                  settings.setUseWideViewPort(true);
+                  swipeRefreshLayout.addView(webView);
 
-                  webView.addJavascriptInterface(
-                      new OrientationBridge(),
-                      "ZysfxOrientation"
+                  swipeRefreshLayout.setOnChildScrollUpCallback(
+                      (parent, child) ->
+                          webView != null &&
+                          webView.canScrollVertically(-1)
                   );
 
                   swipeRefreshLayout.setOnRefreshListener(() -> {
@@ -329,29 +200,32 @@ jobs:
                       }
                   });
 
-                  swipeRefreshLayout.setOnChildScrollUpCallback(
-                      (parent, child) ->
-                          webView != null && webView.getScrollY() > 0
-                  );
+                  WebSettings settings = webView.getSettings();
+                  settings.setJavaScriptEnabled(true);
+                  settings.setDomStorageEnabled(true);
+                  settings.setMediaPlaybackRequiresUserGesture(false);
+                  settings.setSupportZoom(true);
+                  settings.setBuiltInZoomControls(false);
+                  settings.setLoadWithOverviewMode(true);
+                  settings.setUseWideViewPort(true);
 
                   webView.setWebViewClient(new WebViewClient() {
 
                       @Override
-                      public void onPageFinished(WebView view, String url) {
+                      public void onPageFinished(
+                              WebView view, String url) {
                           super.onPageFinished(view, url);
 
                           if (swipeRefreshLayout != null) {
                               swipeRefreshLayout.setRefreshing(false);
                           }
-
-                          injectOrientationDetector(view);
                       }
 
                       @Override
                       public void onReceivedError(
                               WebView view,
-                              android.webkit.WebResourceRequest request,
-                              android.webkit.WebResourceError error) {
+                              WebResourceRequest request,
+                              WebResourceError error) {
                           super.onReceivedError(view, request, error);
 
                           if (request.isForMainFrame()
@@ -362,6 +236,15 @@ jobs:
                   });
 
                   webView.setWebChromeClient(new WebChromeClient() {
+
+                      @Override
+                      public void onProgressChanged(
+                              WebView view, int progress) {
+                          if (progress >= 100 &&
+                                  swipeRefreshLayout != null) {
+                              swipeRefreshLayout.setRefreshing(false);
+                          }
+                      }
 
                       @Override
                       public void onShowCustomView(
@@ -376,11 +259,7 @@ jobs:
                           customView = view;
                           fullscreenCallback = callback;
 
-                          if (!orientationChanged) {
-                              oldRequestedOrientation =
-                                  getRequestedOrientation();
-                              orientationChanged = true;
-                          }
+                          oldRequestedOrientation = getRequestedOrientation();
 
                           View decor = getWindow().getDecorView();
                           oldSystemUiVisibility =
@@ -388,6 +267,7 @@ jobs:
 
                           fullscreenContainer =
                               new FrameLayout(MainActivity.this);
+
                           fullscreenContainer.setBackgroundColor(Color.BLACK);
 
                           fullscreenContainer.addView(
@@ -410,10 +290,9 @@ jobs:
                               WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
                           );
 
+                          // 视频全屏时允许系统传感器自动切换横竖屏。
                           setRequestedOrientation(
-                              lastMediaLandscape
-                                  ? ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-                                  : ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                              ActivityInfo.SCREEN_ORIENTATION_SENSOR
                           );
 
                           decor.setSystemUiVisibility(
@@ -432,14 +311,6 @@ jobs:
                       }
                   });
 
-                  swipeRefreshLayout.addView(
-                      webView,
-                      new SwipeRefreshLayout.LayoutParams(
-                          ViewGroup.LayoutParams.MATCH_PARENT,
-                          ViewGroup.LayoutParams.MATCH_PARENT
-                      )
-                  );
-
                   setContentView(swipeRefreshLayout);
 
                   if (state == null) {
@@ -449,62 +320,10 @@ jobs:
                   }
               }
 
-              private void injectOrientationDetector(WebView view) {
-                  String js =
-                      "(function(){"
-                    + "if(window.__zysfxOrientationInstalled)return;"
-                    + "window.__zysfxOrientationInstalled=true;"
-                    + "function visible(e){"
-                    + "if(!e)return false;"
-                    + "var r=e.getBoundingClientRect(),s=getComputedStyle(e);"
-                    + "return r.width>0&&r.height>0&&s.display!=='none'&&s.visibility!=='hidden';"
-                    + "}"
-                    + "function detect(){"
-                    + "var root=document.fullscreenElement||document.webkitFullscreenElement;"
-                    + "var v=root&&root.querySelector('video');"
-                    + "if(!v){"
-                    + "var videos=document.querySelectorAll('video');"
-                    + "var area=0;"
-                    + "for(var i=0;i<videos.length;i++){"
-                    + "if(!visible(videos[i]))continue;"
-                    + "var r=videos[i].getBoundingClientRect();"
-                    + "if(r.width*r.height>area){area=r.width*r.height;v=videos[i];}"
-                    + "}"
-                    + "}"
-                    + "if(v&&visible(v)&&v.videoWidth>0&&v.videoHeight>0){"
-                    + "ZysfxOrientation.setMediaDimensions(v.videoWidth,v.videoHeight);"
-                    + "if(root){"
-                    + "ZysfxOrientation.setContentOrientation(v.videoWidth>v.videoHeight?1:0);"
-                    + "}return;"
-                    + "}"
-                    + "var img=root&&root.querySelector('img');"
-                    + "if(img){"
-                    + "ZysfxOrientation.setMediaDimensions(0,0);"
-                    + "ZysfxOrientation.setContentOrientation(0);"
-                    + "return;"
-                    + "}"
-                    + "if(!root){ZysfxOrientation.restoreContentOrientation();}"
-                    + "}"
-                    + "document.addEventListener('fullscreenchange',function(){setTimeout(detect,100);});"
-                    + "document.addEventListener('webkitfullscreenchange',function(){setTimeout(detect,100);});"
-                    + "document.addEventListener('loadedmetadata',function(e){"
-                    + "var v=e.target;"
-                    + "if(v&&v.tagName==='VIDEO'&&v.videoWidth&&v.videoHeight){"
-                    + "ZysfxOrientation.setMediaDimensions(v.videoWidth,v.videoHeight);"
-                    + "}"
-                    + "},true);"
-                    + "document.addEventListener('click',function(){"
-                    + "setTimeout(detect,300);setTimeout(detect,800);"
-                    + "},true);"
-                    + "new MutationObserver(function(){setTimeout(detect,250);})"
-                    + ".observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['class','style']});"
-                    + "})();";
-
-                  view.evaluateJavascript(js, null);
-              }
-
               private void hideFullscreen() {
-                  if (customView == null) return;
+                  if (customView == null) {
+                      return;
+                  }
 
                   View decor = getWindow().getDecorView();
 
@@ -519,16 +338,17 @@ jobs:
                       WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
                   );
 
+                  setRequestedOrientation(oldRequestedOrientation);
                   decor.setSystemUiVisibility(oldSystemUiVisibility);
 
-                  if (fullscreenCallback != null) {
-                      WebChromeClient.CustomViewCallback callback =
-                          fullscreenCallback;
-                      fullscreenCallback = null;
+                  WebChromeClient.CustomViewCallback callback =
+                      fullscreenCallback;
+
+                  fullscreenCallback = null;
+
+                  if (callback != null) {
                       callback.onCustomViewHidden();
                   }
-
-                  restoreOrientation();
               }
 
               @Override
@@ -557,11 +377,8 @@ jobs:
                       hideFullscreen();
                   }
 
-                  restoreOrientation();
-
                   if (webView != null) {
                       webView.stopLoading();
-                      webView.removeJavascriptInterface("ZysfxOrientation");
                       webView.destroy();
                       webView = null;
                   }
@@ -573,19 +390,17 @@ jobs:
 
       - name: Verify generated files
         run: |
-          test -s app/src/main/java/com/zysfx/app/MainActivity.java
-          test -s app/src/main/AndroidManifest.xml
-          test -s app/src/main/res/mipmap-hdpi/ic_launcher.png
+          test -f app/src/main/res/drawable-nodpi/app_icon.png
+          test -f app/src/main/java/com/zysfx/app/MainActivity.java
+          test -f gradle.properties
 
       - name: Build APK
         run: gradle --no-daemon assembleDebug
 
       - name: Verify APK
         run: |
-          APK="app/build/outputs/apk/debug/app-debug.apk"
-          test -s "$APK"
-          ls -lh "$APK"
-          file "$APK"
+          test -s app/build/outputs/apk/debug/app-debug.apk
+          ls -lh app/build/outputs/apk/debug/app-debug.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -593,3 +408,4 @@ jobs:
           name: zysfx-android-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+          retention-days: 7
