@@ -6,6 +6,7 @@ on:
   push:
     paths:
       - ".github/workflows/build.yml"
+      - "app-icon.png"
 
 jobs:
   build:
@@ -25,7 +26,9 @@ jobs:
         uses: android-actions/setup-android@v4
 
       - name: Install Android SDK packages
-        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+        run: |
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+          python3 -m pip install pillow
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -35,7 +38,87 @@ jobs:
       - name: Generate Android project
         shell: bash
         run: |
+          set -e
+
+          if [ ! -f app-icon.png ]; then
+            echo "ERROR: 仓库根目录缺少 app-icon.png"
+            exit 1
+          fi
+
           mkdir -p app/src/main/java/com/zysfx/app
+          mkdir -p app/src/main/res
+
+          python3 - <<'PY'
+          from PIL import Image
+          from pathlib import Path
+
+          src = Image.open("app-icon.png").convert("RGBA")
+          res = Path("app/src/main/res")
+
+          def make_icon(size, background=(17, 17, 20, 255)):
+              canvas = Image.new("RGBA", (size, size), background)
+              icon = src.copy()
+              icon.thumbnail(
+                  (int(size * 0.82), int(size * 0.82)),
+                  Image.Resampling.LANCZOS
+              )
+              x = (size - icon.width) // 2
+              y = (size - icon.height) // 2
+              canvas.alpha_composite(icon, (x, y))
+              return canvas
+
+          sizes = {
+              "mipmap-mdpi": 48,
+              "mipmap-hdpi": 72,
+              "mipmap-xhdpi": 96,
+              "mipmap-xxhdpi": 144,
+              "mipmap-xxxhdpi": 192,
+          }
+
+          for folder, size in sizes.items():
+              path = res / folder
+              path.mkdir(parents=True, exist_ok=True)
+              make_icon(size).save(path / "ic_launcher.png")
+              make_icon(size).save(path / "ic_launcher_round.png")
+
+          drawable = res / "drawable"
+          drawable.mkdir(parents=True, exist_ok=True)
+
+          foreground = Image.new("RGBA", (432, 432), (0, 0, 0, 0))
+          icon = src.copy()
+          icon.thumbnail((280, 280), Image.Resampling.LANCZOS)
+          foreground.alpha_composite(
+              icon,
+              ((432 - icon.width) // 2, (432 - icon.height) // 2)
+          )
+          foreground.save(drawable / "ic_launcher_foreground.png")
+
+          values = res / "values"
+          values.mkdir(parents=True, exist_ok=True)
+          (values / "colors.xml").write_text(
+              '<?xml version="1.0" encoding="utf-8"?>\n'
+              '<resources>\n'
+              '    <color name="ic_launcher_background">#111114</color>\n'
+              '</resources>\n',
+              encoding="utf-8"
+          )
+
+          adaptive = res / "mipmap-anydpi-v26"
+          adaptive.mkdir(parents=True, exist_ok=True)
+
+          xml = (
+              '<?xml version="1.0" encoding="utf-8"?>\n'
+              '<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">\n'
+              '    <background android:drawable="@color/ic_launcher_background"/>\n'
+              '    <foreground android:drawable="@drawable/ic_launcher_foreground"/>\n'
+              '</adaptive-icon>\n'
+          )
+
+          (adaptive / "ic_launcher.xml").write_text(xml, encoding="utf-8")
+          (adaptive / "ic_launcher_round.xml").write_text(xml, encoding="utf-8")
+
+          print("App 图标资源生成成功")
+          PY
 
           cat > settings.gradle <<'EOF'
           pluginManagement {
@@ -45,6 +128,7 @@ jobs:
                   gradlePluginPortal()
               }
           }
+
           dependencyResolutionManagement {
               repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
               repositories {
@@ -52,6 +136,7 @@ jobs:
                   mavenCentral()
               }
           }
+
           rootProject.name = "ZYSFX"
           include(":app")
           EOF
@@ -75,18 +160,31 @@ jobs:
                   applicationId 'com.zysfx.app'
                   minSdk 23
                   targetSdk 35
-                  versionCode 3
-                  versionName '1.2.0'
+                  versionCode 7
+                  versionName '1.5.1'
               }
+
+              buildTypes {
+                  debug {
+                      minifyEnabled false
+                  }
+              }
+          }
+
+          dependencies {
+              implementation 'androidx.swiperefreshlayout:swiperefreshlayout:1.1.0'
           }
           EOF
 
           cat > app/src/main/AndroidManifest.xml <<'EOF'
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
               <uses-permission android:name="android.permission.INTERNET"/>
 
               <application
                   android:label="资源社"
+                  android:icon="@mipmap/ic_launcher"
+                  android:roundIcon="@mipmap/ic_launcher_round"
                   android:theme="@android:style/Theme.Material.Light.NoActionBar"
                   android:usesCleartextTraffic="false">
 
@@ -99,6 +197,7 @@ jobs:
                           <action android:name="android.intent.action.MAIN"/>
                           <category android:name="android.intent.category.LAUNCHER"/>
                       </intent-filter>
+
                   </activity>
               </application>
           </manifest>
@@ -109,8 +208,8 @@ jobs:
 
           import android.app.Activity;
           import android.content.pm.ActivityInfo;
-          import android.os.Bundle;
           import android.graphics.Color;
+          import android.os.Bundle;
           import android.view.View;
           import android.view.ViewGroup;
           import android.view.WindowManager;
@@ -121,9 +220,13 @@ jobs:
           import android.webkit.WebViewClient;
           import android.widget.FrameLayout;
 
+          import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
+
           public class MainActivity extends Activity {
 
               private WebView webView;
+              private SwipeRefreshLayout swipeRefreshLayout;
+
               private View customView;
               private FrameLayout fullscreenContainer;
               private WebChromeClient.CustomViewCallback fullscreenCallback;
@@ -133,13 +236,14 @@ jobs:
                       ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED;
 
               private boolean orientationChanged = false;
-              private boolean lastMediaLandscape = false;
+              private volatile boolean lastMediaLandscape = false;
 
               private void enterOrientation(int orientation) {
                   if (!orientationChanged) {
                       oldRequestedOrientation = getRequestedOrientation();
                       orientationChanged = true;
                   }
+
                   setRequestedOrientation(orientation);
               }
 
@@ -179,11 +283,11 @@ jobs:
                   }
 
                   @JavascriptInterface
-                  public void setMediaDimensions(
-                          final int width,
-                          final int height) {
+                  public void setMediaDimensions(int width, int height) {
                       if (width > 0 && height > 0) {
                           lastMediaLandscape = width > height;
+                      } else {
+                          lastMediaLandscape = false;
                       }
                   }
               }
@@ -192,12 +296,18 @@ jobs:
               protected void onCreate(Bundle state) {
                   super.onCreate(state);
 
-                  webView = new WebView(this);
+                  swipeRefreshLayout = new SwipeRefreshLayout(this);
+                  swipeRefreshLayout.setColorSchemeColors(
+                      Color.rgb(220, 30, 80)
+                  );
 
-                  webView.setLayoutParams(new ViewGroup.LayoutParams(
-                      ViewGroup.LayoutParams.MATCH_PARENT,
-                      ViewGroup.LayoutParams.MATCH_PARENT
-                  ));
+                  webView = new WebView(this);
+                  webView.setLayoutParams(
+                      new ViewGroup.LayoutParams(
+                          ViewGroup.LayoutParams.MATCH_PARENT,
+                          ViewGroup.LayoutParams.MATCH_PARENT
+                      )
+                  );
 
                   WebSettings settings = webView.getSettings();
                   settings.setJavaScriptEnabled(true);
@@ -211,11 +321,43 @@ jobs:
                       "ZysfxOrientation"
                   );
 
+                  swipeRefreshLayout.setOnRefreshListener(() -> {
+                      if (webView != null) {
+                          webView.reload();
+                      } else {
+                          swipeRefreshLayout.setRefreshing(false);
+                      }
+                  });
+
+                  swipeRefreshLayout.setOnChildScrollUpCallback(
+                      (parent, child) ->
+                          webView != null && webView.getScrollY() > 0
+                  );
+
                   webView.setWebViewClient(new WebViewClient() {
+
                       @Override
                       public void onPageFinished(WebView view, String url) {
                           super.onPageFinished(view, url);
+
+                          if (swipeRefreshLayout != null) {
+                              swipeRefreshLayout.setRefreshing(false);
+                          }
+
                           injectOrientationDetector(view);
+                      }
+
+                      @Override
+                      public void onReceivedError(
+                              WebView view,
+                              android.webkit.WebResourceRequest request,
+                              android.webkit.WebResourceError error) {
+                          super.onReceivedError(view, request, error);
+
+                          if (request.isForMainFrame()
+                                  && swipeRefreshLayout != null) {
+                              swipeRefreshLayout.setRefreshing(false);
+                          }
                       }
                   });
 
@@ -234,16 +376,18 @@ jobs:
                           customView = view;
                           fullscreenCallback = callback;
 
-                          oldRequestedOrientation =
+                          if (!orientationChanged) {
+                              oldRequestedOrientation =
                                   getRequestedOrientation();
-                          orientationChanged = true;
+                              orientationChanged = true;
+                          }
 
+                          View decor = getWindow().getDecorView();
                           oldSystemUiVisibility =
-                                  getWindow().getDecorView()
-                                      .getSystemUiVisibility();
+                              decor.getSystemUiVisibility();
 
                           fullscreenContainer =
-                                  new FrameLayout(MainActivity.this);
+                              new FrameLayout(MainActivity.this);
                           fullscreenContainer.setBackgroundColor(Color.BLACK);
 
                           fullscreenContainer.addView(
@@ -253,8 +397,6 @@ jobs:
                                   ViewGroup.LayoutParams.MATCH_PARENT
                               )
                           );
-
-                          View decor = getWindow().getDecorView();
 
                           ((ViewGroup) decor).addView(
                               fullscreenContainer,
@@ -268,16 +410,11 @@ jobs:
                               WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
                           );
 
-                          // 根据视频实际宽高选择方向
-                          if (lastMediaLandscape) {
-                              setRequestedOrientation(
-                                  ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-                              );
-                          } else {
-                              setRequestedOrientation(
-                                  ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-                              );
-                          }
+                          setRequestedOrientation(
+                              lastMediaLandscape
+                                  ? ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                                  : ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                          );
 
                           decor.setSystemUiVisibility(
                               View.SYSTEM_UI_FLAG_FULLSCREEN
@@ -295,7 +432,15 @@ jobs:
                       }
                   });
 
-                  setContentView(webView);
+                  swipeRefreshLayout.addView(
+                      webView,
+                      new SwipeRefreshLayout.LayoutParams(
+                          ViewGroup.LayoutParams.MATCH_PARENT,
+                          ViewGroup.LayoutParams.MATCH_PARENT
+                      )
+                  );
+
+                  setContentView(swipeRefreshLayout);
 
                   if (state == null) {
                       webView.loadUrl("https://www.zysfx.com/");
@@ -309,79 +454,50 @@ jobs:
                       "(function(){"
                     + "if(window.__zysfxOrientationInstalled)return;"
                     + "window.__zysfxOrientationInstalled=true;"
-                    + "var timer=null;"
-                    + "function visible(el){"
-                    + "if(!el)return false;"
-                    + "var r=el.getBoundingClientRect();"
-                    + "var s=getComputedStyle(el);"
-                    + "return r.width>0&&r.height>0&&"
-                    + "s.display!=='none'&&s.visibility!=='hidden';"
-                    + "}"
-                    + "function mediaIn(root){"
-                    + "if(!root)return null;"
-                    + "if(root.matches&&root.matches('img,video'))return root;"
-                    + "return root.querySelector('video,img');"
+                    + "function visible(e){"
+                    + "if(!e)return false;"
+                    + "var r=e.getBoundingClientRect(),s=getComputedStyle(e);"
+                    + "return r.width>0&&r.height>0&&s.display!=='none'&&s.visibility!=='hidden';"
                     + "}"
                     + "function detect(){"
-                    + "var root=document.fullscreenElement;"
-                    + "var media=mediaIn(root);"
-                    + "if(!media){"
-                    + "var selectors="
-                    + "'[class*=lightbox],[id*=lightbox],'"
-                    + "+'[class*=fullscreen],[id*=fullscreen],'"
-                    + "+'[class*=fancybox],[class*=pswp],'"
-                    + "+'[class*=photo-view],[class*=image-view]';"
-                    + "var nodes=document.querySelectorAll(selectors);"
-                    + "var bestArea=0;"
-                    + "for(var i=0;i<nodes.length;i++){"
-                    + "var node=nodes[i];"
-                    + "if(!visible(node))continue;"
-                    + "var r=node.getBoundingClientRect();"
-                    + "if(r.width<innerWidth*.55||"
-                    + "r.height<innerHeight*.40)continue;"
-                    + "var m=mediaIn(node);"
-                    + "if(!m||!visible(m))continue;"
-                    + "var mr=m.getBoundingClientRect();"
-                    + "var area=mr.width*mr.height;"
-                    + "if(area>bestArea){bestArea=area;media=m;}"
+                    + "var root=document.fullscreenElement||document.webkitFullscreenElement;"
+                    + "var v=root&&root.querySelector('video');"
+                    + "if(!v){"
+                    + "var videos=document.querySelectorAll('video');"
+                    + "var area=0;"
+                    + "for(var i=0;i<videos.length;i++){"
+                    + "if(!visible(videos[i]))continue;"
+                    + "var r=videos[i].getBoundingClientRect();"
+                    + "if(r.width*r.height>area){area=r.width*r.height;v=videos[i];}"
                     + "}"
                     + "}"
-                    + "if(media&&visible(media)){"
-                    + "var w=media.tagName==='VIDEO'?"
-                    + "(media.videoWidth||media.clientWidth):"
-                    + "(media.naturalWidth||media.clientWidth);"
-                    + "var h=media.tagName==='VIDEO'?"
-                    + "(media.videoHeight||media.clientHeight):"
-                    + "(media.naturalHeight||media.clientHeight);"
-                    + "if(w>0&&h>0){"
-                    + "ZysfxOrientation.setMediaDimensions(w,h);"
-                    + "ZysfxOrientation.setContentOrientation(w>h?1:0);"
+                    + "if(v&&visible(v)&&v.videoWidth>0&&v.videoHeight>0){"
+                    + "ZysfxOrientation.setMediaDimensions(v.videoWidth,v.videoHeight);"
+                    + "if(root){"
+                    + "ZysfxOrientation.setContentOrientation(v.videoWidth>v.videoHeight?1:0);"
+                    + "}return;"
+                    + "}"
+                    + "var img=root&&root.querySelector('img');"
+                    + "if(img){"
+                    + "ZysfxOrientation.setMediaDimensions(0,0);"
+                    + "ZysfxOrientation.setContentOrientation(0);"
                     + "return;"
                     + "}"
+                    + "if(!root){ZysfxOrientation.restoreContentOrientation();}"
                     + "}"
-                    + "if(!document.fullscreenElement){"
-                    + "ZysfxOrientation.restoreContentOrientation();"
-                    + "}"
-                    + "}"
-                    + "document.addEventListener('fullscreenchange',detect);"
-                    + "document.addEventListener('webkitfullscreenchange',detect);"
-                    + "document.addEventListener('click',function(){"
-                    + "setTimeout(detect,300);"
-                    + "setTimeout(detect,800);"
-                    + "},true);"
+                    + "document.addEventListener('fullscreenchange',function(){setTimeout(detect,100);});"
+                    + "document.addEventListener('webkitfullscreenchange',function(){setTimeout(detect,100);});"
                     + "document.addEventListener('loadedmetadata',function(e){"
                     + "var v=e.target;"
-                    + "if(v&&v.tagName==='VIDEO'){"
-                    + "ZysfxOrientation.setMediaDimensions("
-                    + "v.videoWidth,v.videoHeight);"
+                    + "if(v&&v.tagName==='VIDEO'&&v.videoWidth&&v.videoHeight){"
+                    + "ZysfxOrientation.setMediaDimensions(v.videoWidth,v.videoHeight);"
                     + "}"
                     + "},true);"
-                    + "new MutationObserver(function(){"
-                    + "if(timer)clearTimeout(timer);"
-                    + "timer=setTimeout(detect,200);"
-                    + "}).observe(document.documentElement,{"
-                    + "childList:true,subtree:true,attributes:true,"
-                    + "attributeFilter:['class','style']});"
+                    + "document.addEventListener('click',function(){"
+                    + "setTimeout(detect,300);setTimeout(detect,800);"
+                    + "},true);"
+                    + "new MutationObserver(function(){setTimeout(detect,250);})"
+                    + ".observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['class','style']});"
                     + "})();";
 
                   view.evaluateJavascript(js, null);
@@ -404,19 +520,21 @@ jobs:
                   );
 
                   decor.setSystemUiVisibility(oldSystemUiVisibility);
-                  restoreOrientation();
 
                   if (fullscreenCallback != null) {
                       WebChromeClient.CustomViewCallback callback =
-                              fullscreenCallback;
+                          fullscreenCallback;
                       fullscreenCallback = null;
                       callback.onCustomViewHidden();
                   }
+
+                  restoreOrientation();
               }
 
               @Override
               protected void onSaveInstanceState(Bundle out) {
                   super.onSaveInstanceState(out);
+
                   if (webView != null) {
                       webView.saveState(out);
                   }
@@ -453,8 +571,21 @@ jobs:
           }
           EOF
 
+      - name: Verify generated files
+        run: |
+          test -s app/src/main/java/com/zysfx/app/MainActivity.java
+          test -s app/src/main/AndroidManifest.xml
+          test -s app/src/main/res/mipmap-hdpi/ic_launcher.png
+
       - name: Build APK
-        run: gradle assembleDebug
+        run: gradle --no-daemon assembleDebug
+
+      - name: Verify APK
+        run: |
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+          ls -lh "$APK"
+          file "$APK"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
